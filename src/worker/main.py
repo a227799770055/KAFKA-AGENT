@@ -52,20 +52,21 @@ def main() -> None:
             for thought in thoughts:
                 producer.produce(TOPIC_AGENT_THOUGHTS, thought, key=task.task_id)
 
-            # ── 成功：發布 AnalysisResult，更新 Redis ─────────────────
+            # ── 成功：先寫 Redis，再發 Kafka（避免 Aggregator 收到訊息時 Redis 尚未更新）
             if isinstance(result, AnalysisResult):
-                producer.produce(TOPIC_ANALYSIS_RESULTS, result, key=task.task_id)
                 redis.push_result(task.task_id, result.content)
+                redis.push_ticker(task.task_id, task.ticker)
                 completed = redis.increment_completed(task.task_id)
+                producer.produce(TOPIC_ANALYSIS_RESULTS, result, key=task.task_id)
                 logger.info(
                     "[worker] published result ticker=%s completed=%d/%d",
                     task.ticker, completed, task.total_subtasks,
                 )
 
-            # ── 失敗：發布 DLQMessage，仍需更新 Redis 讓 Aggregator 不卡住 ──
+            # ── 失敗：先更新 Redis，再發 DLQ，讓 Aggregator 不卡住 ──────
             elif isinstance(result, DLQMessage):
-                producer.produce(TOPIC_DLQ, result, key=task.task_id)
                 completed = redis.increment_completed(task.task_id)
+                producer.produce(TOPIC_DLQ, result, key=task.task_id)
                 logger.warning(
                     "[worker] sent to DLQ ticker=%s completed=%d/%d",
                     task.ticker, completed, task.total_subtasks,

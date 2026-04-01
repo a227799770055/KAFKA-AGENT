@@ -59,6 +59,21 @@ class RedisClient:
         """取得所有 Worker 暫存的分析結果。"""
         return self._r.lrange(f"task:{task_id}:results", 0, -1)
 
+    def get_completed(self, task_id: str) -> int:
+        """取得已完成的 subtask 數量。"""
+        val = self._r.get(f"task:{task_id}:completed")
+        return int(val) if val else 0
+
+    def push_ticker(self, task_id: str, ticker: str) -> None:
+        """記錄已完成的 ticker，供 Aggregator 填入 FinalReport.tickers。"""
+        key = f"task:{task_id}:tickers"
+        self._r.sadd(key, ticker)
+        self._r.expire(key, 600)
+
+    def get_tickers(self, task_id: str) -> list[str]:
+        """取得所有已完成的 ticker 清單。"""
+        return list(self._r.smembers(f"task:{task_id}:tickers"))
+
     # ── 原子鎖（Aggregator 防止重複合成） ─────────────────────────────
 
     def acquire_synthesis_lock(self, task_id: str) -> bool:
