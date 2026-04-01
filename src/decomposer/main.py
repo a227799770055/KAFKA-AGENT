@@ -1,10 +1,11 @@
 import logging
 import sys
 
-from configs.kafka_config import TOPIC_AGENT_THOUGHTS, TOPIC_TICKER_TASKS
-from src.common.kafka_wrapper import KafkaProducer
+from configs.kafka_config import TOPIC_AGENT_THOUGHTS, TOPIC_FINAL_REPORTS, TOPIC_TICKER_TASKS
+from src.common.kafka_wrapper import KafkaConsumer, KafkaProducer
 from src.common.logging_config import setup_logging
 from src.common.redis_client import RedisClient
+from src.common.schemas import FinalReport
 from src.decomposer.agent import DecomposerAgent
 
 setup_logging()
@@ -36,6 +37,23 @@ def main(query: str) -> None:
 
     producer.flush()
     logger.info("[decomposer] done, dispatched %d task(s) for query=%r", total, query)
+
+    # ── 等待並印出最終報告 ────────────────────────────────────────────
+    print("\n等待分析報告中...\n")
+
+    consumer = KafkaConsumer(
+        topics=[TOPIC_FINAL_REPORTS],
+        group_id=f"cli-{task_id}",  # 每次查詢用獨立 group_id，確保讀到自己的報告
+    )
+
+    try:
+        while True:
+            report = consumer.poll(FinalReport, timeout=2.0)
+            if report and report.task_id == task_id:
+                print(report.report)
+                break
+    finally:
+        consumer.close()
 
 
 if __name__ == "__main__":
