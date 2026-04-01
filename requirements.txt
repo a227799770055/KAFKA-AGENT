@@ -8,7 +8,7 @@ redis==5.0.1
 google-generativeai==0.7.2
 
 # Financial Data
-yfinance==0.2.40
+yfinance>=1.2.0
 finnhub-python==2.4.19
 
 # Data Validation
