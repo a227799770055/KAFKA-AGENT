@@ -61,4 +61,37 @@ services:
       timeout: 5s
       retries: 5
 
-  # Worker 與 Aggregator 服務將在 Phase 4 加入
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    container_name: worker
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_URL: redis://redis:6379/0
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY}
+      LOG_LEVEL: INFO
+    restart: on-failure
+
+  aggregator:
+    build:
+      context: .
+      dockerfile: docker/aggregator/Dockerfile
+    container_name: aggregator
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_URL: redis://redis:6379/0
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      LOG_LEVEL: INFO
+    restart: on-failure
