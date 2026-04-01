@@ -1,0 +1,46 @@
+import logging
+import sys
+
+from configs.kafka_config import TOPIC_AGENT_THOUGHTS, TOPIC_TICKER_TASKS
+from src.common.kafka_wrapper import KafkaProducer
+from src.common.logging_config import setup_logging
+from src.common.redis_client import RedisClient
+from src.decomposer.agent import DecomposerAgent
+
+setup_logging()
+logger = logging.getLogger(__name__)
+
+
+def main(query: str) -> None:
+    agent = DecomposerAgent()
+    producer = KafkaProducer()
+    redis = RedisClient()
+
+    tasks, thoughts = agent.run(query)
+
+    task_id = tasks[0].task_id
+    total = len(tasks)
+
+    # ── Redis 登記任務狀態 ────────────────────────────────────────────
+    redis.init_task(task_id=task_id, total=total, query=query)
+    logger.info("[decomposer] init_task task_id=%s total=%d", task_id, total)
+
+    # ── 發布 AgentThoughts ────────────────────────────────────────────
+    for thought in thoughts:
+        producer.produce(TOPIC_AGENT_THOUGHTS, thought, key=task_id)
+
+    # ── 發布 TickerTasks ──────────────────────────────────────────────
+    for task in tasks:
+        producer.produce(TOPIC_TICKER_TASKS, task, key=task_id)
+        logger.info("[decomposer] produced task ticker=%s task_id=%s", task.ticker, task_id)
+
+    producer.flush()
+    logger.info("[decomposer] done, dispatched %d task(s) for query=%r", total, query)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python -m src.decomposer.main \"<query>\"")
+        sys.exit(1)
+
+    main(sys.argv[1])
