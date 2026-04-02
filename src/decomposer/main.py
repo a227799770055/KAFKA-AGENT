@@ -17,7 +17,11 @@ def main(query: str) -> None:
     producer = KafkaProducer()
     redis = RedisClient()
 
-    tasks, thoughts = agent.run(query)
+    try:
+        tasks, thoughts = agent.run(query)
+    except ValueError as e:
+        print(f"無法識別股票代碼，請輸入感興趣的股票代號（例如：分析 NVDA 和 TSLA）。\n原因：{e}")
+        return
 
     task_id = tasks[0].task_id
     total = len(tasks)
@@ -32,7 +36,7 @@ def main(query: str) -> None:
 
     # ── 發布 TickerTasks ──────────────────────────────────────────────
     for task in tasks:
-        producer.produce(TOPIC_TICKER_TASKS, task, key=task_id)
+        producer.produce(TOPIC_TICKER_TASKS, task, key=None)
         logger.info("[decomposer] produced task ticker=%s task_id=%s", task.ticker, task_id)
 
     producer.flush()

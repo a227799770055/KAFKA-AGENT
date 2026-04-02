@@ -65,7 +65,6 @@ services:
     build:
       context: .
       dockerfile: docker/worker/Dockerfile
-    container_name: worker
     depends_on:
       kafka:
         condition: service_healthy

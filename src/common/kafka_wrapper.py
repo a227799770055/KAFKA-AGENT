@@ -20,6 +20,8 @@ class KafkaProducer:
         self._producer = Producer({
             "bootstrap.servers": bootstrap_servers,
             "acks": "all",  # 確保 Broker 確認收到才算成功
+            "partitioner": "random",        # key=None 時隨機分配到各 partition
+            "queue.buffering.max.ms": "0",  # 立即送出，避免 sticky batching 把連續訊息黏在同一個 partition
         })
 
     def produce(

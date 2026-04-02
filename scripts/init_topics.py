@@ -13,7 +13,7 @@ from confluent_kafka.admin import AdminClient, NewTopic
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
 
 TOPICS = [
-    NewTopic("ticker-tasks",     num_partitions=3, replication_factor=1),
+    NewTopic("ticker-tasks",     num_partitions=2, replication_factor=1),
     NewTopic("ticker-tasks.DLQ", num_partitions=1, replication_factor=1),
     NewTopic("analysis-results", num_partitions=1, replication_factor=1),
     NewTopic("agent-thoughts",   num_partitions=1, replication_factor=1),
