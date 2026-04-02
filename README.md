@@ -283,3 +283,4 @@ With 1 worker, NVDA and TSLA are analyzed **sequentially**. With 2 workers, each
 | 🔲 | **Intent Classification** | Add an intent classifier before the Decomposer to map Chinese company names to tickers (e.g. 台積電 → TSM) and reject non-stock-related queries |
 | 🔲 | **Token Optimization** | Change Worker output to a structured JSON summary (price, change, sentiment, key points) instead of full Markdown; Aggregator synthesizes from structured data, significantly reducing input tokens |
 | 🔲 | **Deterministic Partition Assignment** | Replace `random` partitioner with explicit `partition=i % num_partitions` to guarantee different tickers are always routed to different partitions for true parallel processing |
+| 🔲 | **Parallel Data Fetching in Worker** | Use `ThreadPoolExecutor` to run `get_stock_price` and `get_company_news` concurrently within each Worker, then pass both results to `generate_summary`; estimated ~3–5s saved per ticker |
