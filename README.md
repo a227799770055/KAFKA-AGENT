@@ -116,7 +116,21 @@ cd kafka-agent
 
 Create a `.env` file in the project root with your API keys. See [Configuration](#configuration) for the full list of available variables.
 
-### Step 2 — Start All Services
+### Step 2 — Set Up Python Environment
+
+```bash
+python -m venv .venv
+
+# macOS / Linux
+source .venv/bin/activate
+
+# Windows
+.venv\Scripts\activate
+
+pip install -r requirements.txt
+```
+
+### Step 3 — Start All Services (Docker)
 
 ```bash
 docker compose up -d --build
@@ -132,7 +146,7 @@ docker ps
 
 You should see `(healthy)` next to `kafka`, `zookeeper`, and `redis`.
 
-### Step 3 — Initialize Kafka Topics
+### Step 4 — Initialize Kafka Topics
 
 ```bash
 python scripts/init_topics.py
@@ -152,7 +166,7 @@ Expected output:
 
 > If topics already exist from a previous run, the script will skip them safely.
 
-### Step 4 — Start the Interactive CLI
+### Step 5 — Start the Interactive CLI
 
 ```bash
 PYTHONPATH=. python scripts/interactive.py
@@ -215,26 +229,6 @@ All services are defined in `docker-compose.yml`. The table below shows what eac
 | `redis` | `redis:7-alpine` | `6379` | Task state coordination between agents |
 | `worker` | _(local build)_ | — | Scalable worker agent; consumes `ticker-tasks` |
 | `aggregator` | _(local build)_ | — | Aggregator agent; consumes `analysis-results` |
-
-#### Common Docker Commands
-
-```bash
-# Start all services (first time — builds images)
-docker compose up -d --build
-
-# Start all services (subsequent runs)
-docker compose up -d
-
-# View logs for a specific service
-docker compose logs -f worker
-docker compose logs -f aggregator
-
-# Stop all services
-docker compose down
-
-# Stop and remove all data (volumes)
-docker compose down -v
-```
 
 #### Kafka UI
 
