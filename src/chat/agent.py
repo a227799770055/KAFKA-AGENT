@@ -4,6 +4,8 @@ from typing import Callable
 
 import google.generativeai as genai
 
+from configs.prompts import CHAT_SYSTEM_INSTRUCTION
+
 logger = logging.getLogger(__name__)
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -30,11 +32,6 @@ _ANALYZE_STOCKS_TOOL = genai.protos.Tool(
     ]
 )
 
-_SYSTEM_INSTRUCTION = (
-    "你是一個友善的股票分析助理。"
-    "當使用者想了解特定股票的走勢、價格或投資建議時，使用 analyze_stocks 工具進行分析。"
-    "其他情況下正常對話即可。請使用繁體中文回應。"
-)
 
 
 class ChatAgent:
@@ -53,7 +50,7 @@ class ChatAgent:
         self._model = genai.GenerativeModel(
             "gemini-2.5-flash",
             tools=[_ANALYZE_STOCKS_TOOL],
-            system_instruction=_SYSTEM_INSTRUCTION,
+            system_instruction=CHAT_SYSTEM_INSTRUCTION,
         )
         self._chat = self._model.start_chat(history=[])
 
@@ -71,21 +68,7 @@ class ChatAgent:
             logger.info("[chat] analyze_stocks triggered query=%s", query)
 
             report = self._on_stock_query(query)
-
-            # 將結果回傳給 LLM 保持對話歷史完整
-            self._chat.send_message(
-                genai.protos.Content(
-                    parts=[
-                        genai.protos.Part(
-                            function_response=genai.protos.FunctionResponse(
-                                name="analyze_stocks",
-                                response={"result": "分析完成，報告已顯示給使用者。"},
-                            )
-                        )
-                    ]
-                )
-            )
-
+            
             return report if report else "分析逾時，請稍後再試。"
 
         return part.text
