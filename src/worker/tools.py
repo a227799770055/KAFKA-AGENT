@@ -6,9 +6,9 @@ import finnhub
 import google.generativeai as genai
 import yfinance as yf
 from dotenv import load_dotenv
+from langchain_core.tools import tool
 
 from configs.prompts import WORKER_SUMMARY_PROMPT
-from src.common.retry import with_retry
 
 load_dotenv()
 
@@ -22,21 +22,11 @@ _finnhub = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
 # ── Tools ──────────────────────────────────────────────────────────────────
 
-@with_retry(max_retries=3)
-def get_stock_price(ticker: str) -> dict:
+@tool
+def get_stock_price(ticker: str) -> str:
     """
-    使用 yfinance 取得股票數據。
-    用 download() 取得 OHLCV，用 fast_info 取得 52 週高低點。
-
-    回傳格式：
-    {
-      "ticker": "NVDA",
-      "current_price": 875.4,
-      "change_pct": 2.3,
-      "volume": 45000000,
-      "52w_high": 974.0,
-      "52w_low": 402.0
-    }
+    取得指定股票代碼的最新價格數據，包含當前價格、漲跌幅、成交量、52 週高低點。
+    請傳入標準英文股票代碼，例如 NVDA、TSLA、TSM。
     """
     df = yf.download(ticker, period="5d", interval="1d", progress=False, auto_adjust=True)
 
@@ -51,56 +41,54 @@ def get_stock_price(ticker: str) -> dict:
     change_pct = ((current_price - prev_close) / prev_close * 100) if prev_close else 0
     volume = float(latest["Volume"].iloc[0]) if hasattr(latest["Volume"], "iloc") else float(latest["Volume"])
 
-    # 52 週高低點用 1y 數據計算
     df_1y = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
     w52_high = float(df_1y["High"].max().iloc[0]) if hasattr(df_1y["High"].max(), "iloc") else float(df_1y["High"].max())
     w52_low = float(df_1y["Low"].min().iloc[0]) if hasattr(df_1y["Low"].min(), "iloc") else float(df_1y["Low"].min())
 
-    result = {
-        "ticker": ticker.upper(),
-        "current_price": round(current_price, 2),
-        "change_pct": round(change_pct, 2),
-        "volume": int(volume),
-        "52w_high": round(w52_high, 2),
-        "52w_low": round(w52_low, 2),
-    }
+    result = (
+        f"ticker={ticker.upper()}, current_price={round(current_price, 2)}, "
+        f"change_pct={round(change_pct, 2)}%, volume={int(volume)}, "
+        f"52w_high={round(w52_high, 2)}, 52w_low={round(w52_low, 2)}"
+    )
 
-    logger.info(f"[tools] get_stock_price: {ticker} = ${result['current_price']}")
+    logger.info("[tools] get_stock_price: %s = $%s", ticker, round(current_price, 2))
     return result
 
 
-@with_retry(max_retries=3)
-def get_company_news(ticker: str, days: int = 7) -> list[dict]:
+@tool
+def get_company_news(ticker: str) -> str:
     """
-    使用 Finnhub 取得近期公司新聞。
-
-    回傳格式：
-    [{"title": "...", "summary": "...", "sentiment": "positive|neutral|negative"}]
+    取得指定股票代碼近 7 天的公司新聞（最多 5 筆），包含標題、摘要與情緒分類。
+    請傳入標準英文股票代碼，例如 NVDA、TSLA、TSM。
     """
     from datetime import timedelta
 
     now = datetime.now(timezone.utc)
-    date_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    date_from = (now - timedelta(days=7)).strftime("%Y-%m-%d")
     date_to = now.strftime("%Y-%m-%d")
 
     raw_news = _finnhub.company_news(ticker.upper(), _from=date_from, to=date_to)
 
-    news = []
-    for item in raw_news[:5]:  # 最多取 5 筆
+    lines = []
+    for item in raw_news[:5]:
         summary = item.get("summary") or item.get("headline", "")
-        news.append({
-            "title": item.get("headline", ""),
-            "summary": summary[:300],  # 避免 prompt 過長
-            "sentiment": _simple_sentiment(item.get("headline", "")),
-        })
+        sentiment = _simple_sentiment(item.get("headline", ""))
+        lines.append(
+            f"- [{sentiment}] {item.get('headline', '')} | {summary[:200]}"
+        )
 
-    logger.info(f"[tools] get_company_news: {ticker} = {len(news)} articles")
-    return news
+    result = "\n".join(lines) if lines else "（近期無相關新聞）"
+
+    logger.info("[tools] get_company_news: %s = %d articles", ticker, len(lines))
+    return result
 
 
-def generate_summary(ticker: str, price_data: dict, news_data: list[dict]) -> str:
+@tool
+def generate_summary(ticker: str, price_data: str, news_data: str) -> str:
     """
-    呼叫 Gemini 產出 Markdown 格式的單股分析摘要。
+    根據股價數據與新聞資料，產生 Markdown 格式的單股分析摘要。
+    price_data: get_stock_price 的回傳結果。
+    news_data: get_company_news 的回傳結果。
     """
     prompt = WORKER_SUMMARY_PROMPT.format(
         ticker=ticker,
@@ -111,7 +99,7 @@ def generate_summary(ticker: str, price_data: dict, news_data: list[dict]) -> st
     response = _gemini.generate_content(prompt)
     summary = response.text.strip()
 
-    logger.info(f"[tools] generate_summary: {ticker} done ({len(summary)} chars)")
+    logger.info("[tools] generate_summary: %s done (%d chars)", ticker, len(summary))
     return summary
 
 

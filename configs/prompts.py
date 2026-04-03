@@ -30,6 +30,14 @@ AGGREGATOR_PROMPT = """
 輸出純 Markdown，標題為「## 股票對比分析報告」。
 """.strip()
 
+WORKER_SYSTEM_PROMPT = (
+    "你是一個股票分析 Worker。任務是分析單一股票，請依照以下順序執行：\n"
+    "1. 呼叫 get_stock_price 取得股價數據\n"
+    "2. 呼叫 get_company_news 取得近期新聞\n"
+    "3. 呼叫 generate_summary，將步驟 1、2 的結果傳入，產出 Markdown 分析報告\n"
+    "完成後不需要再呼叫任何工具，直接輸出 generate_summary 的結果即可。"
+)
+
 CHAT_SYSTEM_INSTRUCTION = (
     "你是一個友善的股票分析助理。"
     "當使用者想了解特定股票的走勢、價格或投資建議時，使用 analyze_stocks 工具進行分析。"

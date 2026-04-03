@@ -29,20 +29,26 @@ class KafkaProducer:
         topic: str,
         message: BaseModel,
         key: Optional[str] = None,
+        partition: Optional[int] = None,
     ) -> None:
         """
         將 Pydantic Model 序列化成 JSON 送到指定 Topic。
         key 用於決定要送到哪個 partition（相同 key 保證同一 partition）。
+        partition 直接指定 partition index，優先於 key。
         """
         payload = message.model_dump_json().encode("utf-8")
         encoded_key = key.encode("utf-8") if key else None
 
-        self._producer.produce(
+        kwargs = dict(
             topic=topic,
             value=payload,
             key=encoded_key,
             on_delivery=self._delivery_callback,
         )
+        if partition is not None:
+            kwargs["partition"] = partition
+
+        self._producer.produce(**kwargs)
         self._producer.poll(0)  # 觸發非同步回呼，不阻塞
 
     def flush(self) -> None:

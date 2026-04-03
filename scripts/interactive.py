@@ -10,7 +10,7 @@
 import logging
 import time
 
-from configs.kafka_config import TOPIC_AGENT_THOUGHTS, TOPIC_FINAL_REPORTS, TOPIC_TICKER_TASKS
+from configs.kafka_config import TICKER_TASKS_PARTITIONS, TOPIC_AGENT_THOUGHTS, TOPIC_FINAL_REPORTS, TOPIC_TICKER_TASKS
 from src.chat.agent import ChatAgent
 from src.common.kafka_wrapper import KafkaConsumer, KafkaProducer
 from src.common.logging_config import setup_logging
@@ -53,8 +53,8 @@ def run_stock_analysis(
 
     for thought in thoughts:
         producer.produce(TOPIC_AGENT_THOUGHTS, thought, key=task_id)
-    for task in tasks:
-        producer.produce(TOPIC_TICKER_TASKS, task, key=None)
+    for i, task in enumerate(tasks):
+        producer.produce(TOPIC_TICKER_TASKS, task, key=None, partition=i % TICKER_TASKS_PARTITIONS)
     producer.flush()
 
     print(f"\n分析中：{tickers}，請稍候...\n")

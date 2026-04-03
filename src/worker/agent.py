@@ -1,7 +1,17 @@
 import logging
+import os
 import traceback
 
-from src.common.retry import MaxRetriesExceeded
+from typing import Annotated, Literal
+
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from typing_extensions import TypedDict
+
+from configs.prompts import WORKER_SYSTEM_PROMPT
 from src.common.schemas import (
     AgentThought,
     AnalysisResult,
@@ -13,87 +23,160 @@ from src.worker.tools import generate_summary, get_company_news, get_stock_price
 
 logger = logging.getLogger(__name__)
 
+_TOOLS = [get_stock_price, get_company_news, generate_summary]
+
+
+# ── State ──────────────────────────────────────────────────────────────────
+
+class WorkerState(TypedDict):
+    messages: Annotated[list, add_messages]
+
+
+# ── Nodes ──────────────────────────────────────────────────────────────────
+
+def _build_llm():
+    return ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        google_api_key=os.getenv("GEMINI_API_KEY"),
+    ).bind_tools(_TOOLS)
+
+
+def llm_node(state: WorkerState) -> dict:
+    llm = _build_llm()
+    response = llm.invoke(state["messages"])
+    return {"messages": [response]}
+
+
+# ── Router ─────────────────────────────────────────────────────────────────
+
+def route(state: WorkerState) -> Literal["tools", "__end__"]:
+    last_msg = state["messages"][-1]
+    if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
+        return "tools"
+    return "__end__"
+
+
+# ── Graph ──────────────────────────────────────────────────────────────────
+
+def build_graph():
+    graph = StateGraph(WorkerState)
+    graph.add_node("llm", llm_node)
+    graph.add_node("tools", ToolNode(_TOOLS))
+
+    graph.set_entry_point("llm")
+    graph.add_conditional_edges("llm", route, {
+        "tools": "tools",
+        "__end__": END,
+    })
+    graph.add_edge("tools", "llm")
+
+    return graph.compile()
+
 
 class WorkerAgent:
     """
-    ReAct Loop Worker Agent。
+    LangGraph ReAct Worker Agent。
 
-    每次 run() 對應一個 TickerTask，執行 3 個固定迭代：
-      Iter 1: get_stock_price
-      Iter 2: get_company_news
-      Iter 3: generate_summary
+    每次 run() 對應一個 TickerTask，由 LLM 自主依序呼叫：
+      get_stock_price → get_company_news → generate_summary
 
     回傳 AnalysisResult（成功）或 DLQMessage（失敗）。
-    thoughts 紀錄每步的 THOUGHT / ACTION / OBSERVATION，
-    由呼叫方發布到 agent-thoughts topic。
+    thoughts 從 messages 中擷取，由呼叫方發布到 agent-thoughts topic。
     """
+
+    def __init__(self):
+        self._agent = build_graph()
 
     def run(
         self, task: TickerTask
     ) -> tuple[AnalysisResult | DLQMessage, list[AgentThought]]:
         thoughts: list[AgentThought] = []
 
-        def _thought(iteration: int, step, content: str) -> AgentThought:
-            t = AgentThought(
-                task_id=task.task_id,
-                correlation_id=task.correlation_id,
-                agent_role="worker",
-                ticker=task.ticker,
-                step=step,
-                iteration=iteration,
-                content=content,
-                timestamp=utcnow(),
-            )
-            thoughts.append(t)
-            logger.debug("[worker] iter=%d step=%s ticker=%s", iteration, step, task.ticker)
-            return t
-
         try:
-            # ── Iteration 1: 取得股價 ──────────────────────────────────────
-            _thought(1, "THOUGHT", f"I need to fetch current stock price for {task.ticker}.")
-            _thought(1, "ACTION", "get_stock_price")
+            result = self._agent.invoke({
+                "messages": [
+                    SystemMessage(content=WORKER_SYSTEM_PROMPT),
+                    {"role": "user", "content": f"請分析股票：{task.ticker}"},
+                ]
+            })
 
-            price_data = get_stock_price(task.ticker)
+            for msg in result["messages"]:
+                logger.debug("[worker] message type=%s content=%s", type(msg).__name__, msg)
 
-            _thought(1, "OBSERVATION", f"price={price_data['current_price']} change={price_data['change_pct']}%")
+            thoughts = _extract_thoughts(result["messages"], task)
+            summary = _extract_summary(result["messages"])
 
-            # ── Iteration 2: 取得新聞 ──────────────────────────────────────
-            _thought(2, "THOUGHT", f"I need recent news to understand market sentiment for {task.ticker}.")
-            _thought(2, "ACTION", "get_company_news")
-
-            news_data = get_company_news(task.ticker)
-
-            _thought(2, "OBSERVATION", f"fetched {len(news_data)} articles")
-
-            # ── Iteration 3: 產生摘要 ──────────────────────────────────────
-            _thought(3, "THOUGHT", "I have price and news data. Generating Markdown summary.")
-            _thought(3, "ACTION", "generate_summary")
-
-            summary = generate_summary(task.ticker, price_data, news_data)
-
-            _thought(3, "OBSERVATION", f"summary generated ({len(summary)} chars)")
-
-            result = AnalysisResult(
+            analysis = AnalysisResult(
                 task_id=task.task_id,
                 correlation_id=task.correlation_id,
                 ticker=task.ticker,
                 content=summary,
-                iterations_used=3,
+                iterations_used=len([m for m in result["messages"] if isinstance(m, ToolMessage)]),
                 timestamp=utcnow(),
             )
             logger.info("[worker] completed ticker=%s task_id=%s", task.ticker, task.task_id)
-            return result, thoughts
+            return analysis, thoughts
 
-        except MaxRetriesExceeded as exc:
+        except Exception as exc:
             logger.error(
-                "[worker] MaxRetriesExceeded ticker=%s task_id=%s error=%s",
+                "[worker] failed ticker=%s task_id=%s error=%s",
                 task.ticker, task.task_id, exc,
             )
             dlq = DLQMessage(
                 original_message=task,
-                error_type=type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__,
+                error_type=type(exc).__name__,
                 stack_trace=traceback.format_exc(),
-                retry_count=3,
+                retry_count=0,
                 failed_at=utcnow(),
             )
             return dlq, thoughts
+
+
+# ── 輔助函式 ───────────────────────────────────────────────────────────────
+
+def _extract_thoughts(messages: list, task: TickerTask) -> list[AgentThought]:
+    """從 LangGraph messages 中建立 AgentThought 列表。"""
+    thoughts = []
+    iteration = 0
+
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            iteration += 1
+            for tc in msg.tool_calls:
+                thoughts.append(AgentThought(
+                    task_id=task.task_id,
+                    correlation_id=task.correlation_id,
+                    agent_role="worker",
+                    ticker=task.ticker,
+                    step="ACTION",
+                    iteration=iteration,
+                    content=f"{tc['name']}({tc['args']})",
+                    timestamp=utcnow(),
+                ))
+        elif isinstance(msg, ToolMessage):
+            thoughts.append(AgentThought(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                agent_role="worker",
+                ticker=task.ticker,
+                step="OBSERVATION",
+                iteration=iteration,
+                content=msg.content[:300],
+                timestamp=utcnow(),
+            ))
+
+    return thoughts
+
+
+def _extract_summary(messages: list) -> str:
+    """取最後一則 AIMessage 的文字內容作為分析報告。"""
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and msg.content:
+            content = msg.content
+            if isinstance(content, list):
+                return "".join(
+                    part["text"] for part in content
+                    if isinstance(part, dict) and "text" in part
+                )
+            return content
+    return "（無法產生分析報告）"

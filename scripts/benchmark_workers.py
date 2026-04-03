@@ -16,7 +16,7 @@ Worker 數量 benchmark 工具。
 import sys
 import time
 
-from configs.kafka_config import TOPIC_AGENT_THOUGHTS, TOPIC_FINAL_REPORTS, TOPIC_TICKER_TASKS
+from configs.kafka_config import TICKER_TASKS_PARTITIONS, TOPIC_AGENT_THOUGHTS, TOPIC_FINAL_REPORTS, TOPIC_TICKER_TASKS
 from src.common.kafka_wrapper import KafkaConsumer, KafkaProducer
 from src.common.logging_config import setup_logging
 from src.common.redis_client import RedisClient
@@ -64,8 +64,8 @@ def run_benchmark(query: str) -> None:
     producer = KafkaProducer()
     for thought in thoughts:
         producer.produce(TOPIC_AGENT_THOUGHTS, thought, key=task_id)
-    for task in tasks:
-        producer.produce(TOPIC_TICKER_TASKS, task, key=None)
+    for i, task in enumerate(tasks):
+        producer.produce(TOPIC_TICKER_TASKS, task, key=None, partition=i % TICKER_TASKS_PARTITIONS)
     producer.flush()
 
     start_time = time.monotonic()
