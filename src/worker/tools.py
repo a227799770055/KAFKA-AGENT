@@ -3,20 +3,20 @@ import os
 from datetime import datetime, timezone
 
 import finnhub
-import google.generativeai as genai
 import yfinance as yf
 from dotenv import load_dotenv
 from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from configs.prompts import WORKER_SUMMARY_PROMPT
+from datetime import timedelta
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 # ── Clients ────────────────────────────────────────────────────────────────
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-_gemini = genai.GenerativeModel("gemini-2.5-flash")
+_gemini = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=os.getenv("GEMINI_API_KEY"), timeout=30)
 _finnhub = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
 
@@ -28,11 +28,12 @@ def get_stock_price(ticker: str) -> str:
     取得指定股票代碼的最新價格數據，包含當前價格、漲跌幅、成交量、52 週高低點。
     請傳入標準英文股票代碼，例如 NVDA、TSLA、TSM。
     """
-    df = yf.download(ticker, period="5d", interval="1d", progress=False, auto_adjust=True)
+    df_1y = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True, timeout=10)
 
-    if df.empty:
+    if df_1y.empty:
         raise ValueError(f"No price data returned for {ticker}")
 
+    df = df_1y.tail(2)
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) >= 2 else df.iloc[-1]
 
@@ -41,7 +42,6 @@ def get_stock_price(ticker: str) -> str:
     change_pct = ((current_price - prev_close) / prev_close * 100) if prev_close else 0
     volume = float(latest["Volume"].iloc[0]) if hasattr(latest["Volume"], "iloc") else float(latest["Volume"])
 
-    df_1y = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
     w52_high = float(df_1y["High"].max().iloc[0]) if hasattr(df_1y["High"].max(), "iloc") else float(df_1y["High"].max())
     w52_low = float(df_1y["Low"].min().iloc[0]) if hasattr(df_1y["Low"].min(), "iloc") else float(df_1y["Low"].min())
 
@@ -61,7 +61,6 @@ def get_company_news(ticker: str) -> str:
     取得指定股票代碼近 7 天的公司新聞（最多 5 筆），包含標題、摘要與情緒分類。
     請傳入標準英文股票代碼，例如 NVDA、TSLA、TSM。
     """
-    from datetime import timedelta
 
     now = datetime.now(timezone.utc)
     date_from = (now - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -96,8 +95,8 @@ def generate_summary(ticker: str, price_data: str, news_data: str) -> str:
         news_data=news_data,
     )
 
-    response = _gemini.generate_content(prompt)
-    summary = response.text.strip()
+    response = _gemini.invoke(prompt)
+    summary = response.content.strip()
 
     logger.info("[tools] generate_summary: %s done (%d chars)", ticker, len(summary))
     return summary

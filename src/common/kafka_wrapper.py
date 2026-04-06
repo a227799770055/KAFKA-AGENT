@@ -88,6 +88,7 @@ class KafkaConsumer:
             "enable.auto.commit": False,  # 手動 commit，確保處理完才標記
         })
         self._consumer.subscribe(topics)
+        self._pending_msg: Optional[KafkaMessage] = None
         logger.info(f"Subscribed to topics: {topics} as group: {group_id}")
 
     def poll(
@@ -98,6 +99,7 @@ class KafkaConsumer:
         """
         拉取一筆訊息並反序列化成指定的 Pydantic Model。
         沒有新訊息時回傳 None。
+        commit 需在處理完成後由呼叫方呼叫 commit()。
         """
         msg = self._consumer.poll(timeout)
 
@@ -110,7 +112,7 @@ class KafkaConsumer:
 
         try:
             parsed = model.model_validate_json(msg.value().decode("utf-8"))
-            self._consumer.commit(message=msg)  # 處理成功才 commit
+            self._pending_msg = msg
             return parsed
         except Exception as e:
             logger.error(
@@ -118,6 +120,12 @@ class KafkaConsumer:
                 extra={"error": str(e), "raw": msg.value()},
             )
             return None
+
+    def commit(self) -> None:
+        """處理完成後手動 commit offset，確保訊息不會因為中途失敗而遺失。"""
+        if self._pending_msg is not None:
+            self._consumer.commit(message=self._pending_msg)
+            self._pending_msg = None
 
     def close(self) -> None:
         """關閉 Consumer，釋放資源。"""

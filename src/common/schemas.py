@@ -53,11 +53,10 @@ class FinalReport(BaseModel):
 
 
 class DLQMessage(BaseModel):
-    """Worker 耗盡重試後發布到 ticker-tasks.DLQ 的失敗訊息。"""
+    """Worker 處理失敗後發布到 ticker-tasks.DLQ 的失敗訊息。"""
     original_message: TickerTask
     error_type: str
     stack_trace: str
-    retry_count: int
     failed_at: datetime
 
 

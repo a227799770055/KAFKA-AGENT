@@ -59,8 +59,10 @@ def main() -> None:
                 )
 
             producer.flush()
+            consumer.commit()  # 發布成功後才 commit offset
 
     finally:
+        producer.flush()
         consumer.close()
         logger.info("[aggregator] stopped")
 

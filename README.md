@@ -50,7 +50,7 @@ flowchart TD
 | `ticker-tasks` | Decomposer | Worker | One message per ticker, 2 partitions for parallel processing |
 | `ticker-tasks.DLQ` | Worker | — | Failed tasks after max retries |
 | `analysis-results` | Worker | Aggregator | Per-ticker analysis in Markdown |
-| `agent-thoughts` | All Agents | — | ReAct loop traces (THOUGHT / ACTION / OBSERVATION) |
+| `agent-thoughts` | All Agents | — | ReAct loop traces (ACTION / OBSERVATION) |
 | `final-reports` | Aggregator | Decomposer CLI | Final cross-ticker comparison report |
 
 ## Project Structure
@@ -62,8 +62,9 @@ kafka-agent/
 │   │   ├── schemas.py          # Pydantic message schemas (TickerTask, AnalysisResult, FinalReport, ...)
 │   │   ├── kafka_wrapper.py    # KafkaProducer / KafkaConsumer with Pydantic serialization
 │   │   ├── redis_client.py     # Redis helpers for task coordination and distributed locks
-│   │   ├── retry.py            # @with_retry decorator with exponential backoff
 │   │   └── logging_config.py   # JSON structured logging (stdout + optional file)
+│   ├── chat/                   # Chat Agent — intent detection and conversational interface
+│   │   └── agent.py            # ChatAgent: routes between general chat and stock analysis
 │   ├── decomposer/             # Decomposer Agent — parses query and dispatches tasks
 │   │   ├── agent.py            # LLM-based ticker extraction logic
 │   │   └── main.py             # CLI entry point, waits for FinalReport
@@ -82,6 +83,7 @@ kafka-agent/
 │   └── aggregator/Dockerfile
 ├── scripts/                    # Utility scripts
 │   ├── init_topics.py          # Create all Kafka topics (run once after docker compose up)
+│   ├── interactive.py          # Interactive CLI — chat or stock analysis queries
 │   └── benchmark_workers.py    # Measure end-to-end latency across different worker counts
 ├── tests/
 │   ├── unit/                   # Unit tests (no infrastructure required)
@@ -92,6 +94,7 @@ kafka-agent/
 ```
 
 - **`src/common/`** — infrastructure wrappers shared by all three agents; change once, applies everywhere
+- **`src/chat/`** — conversational layer; classifies user intent and delegates stock queries to the Decomposer pipeline
 - **`src/decomposer/`** — the entry point of every query; responsible for ticker parsing and result display
 - **`src/worker/`** — the scalable unit of work; each instance independently consumes and analyzes one ticker at a time
 - **`src/aggregator/`** — the final stage; waits until all sub-tasks complete (via Redis) before calling Gemini for synthesis
@@ -176,16 +179,17 @@ The CLI will start and wait for your input:
 
 ```
 === Kafka AI Agent ===
-輸入股票查詢（例如：分析 NVDA 和 TSLA），輸入 'exit' 結束。
+你可以直接對話，或詢問股票分析（例如：最近 NVDA 表現如何？）
+輸入 'exit' 結束。
 
-查詢> 分析 NVDA 和 TSLA
+你> 分析 NVDA 和 TSLA
 
 分析中：['NVDA', 'TSLA']，請稍候...
 
-## Stock Comparison Report
+AI> ## Stock Comparison Report
 ...
 
-查詢>
+你>
 ```
 
 After each report is printed, the prompt returns and waits for the next query. Enter `exit` or press `Ctrl+C` to quit.
@@ -279,8 +283,11 @@ With 1 worker, NVDA and TSLA are analyzed **sequentially**. With 2 workers, each
 
 | Status | Item | Description |
 | :--- | :--- | :--- |
+| ✅ | **Deterministic Partition Assignment** | Replace `random` partitioner with explicit `partition=i % num_partitions` to guarantee different tickers are always routed to different partitions for true parallel processing |
+| ✅ | **Merge yfinance API Calls** | Combine two separate yfinance downloads (5d + 1y) into a single 1y download to reduce network round-trips |
+| 🔲 | **Fix Offset Commit Timing** | Move `consumer.commit()` to after publish succeeds, preventing message loss when worker crashes mid-processing |
+| 🔲 | **Idempotent Processing** | Use `SET NX processed:{correlation_id}` in Redis to deduplicate redelivered messages and achieve exactly-once semantics |
 | 🔲 | **Redis Cache Layer** | Cache stock price (TTL 5min), news (TTL 30min), and summaries (TTL 10min) in `worker/tools.py` to avoid duplicate API and LLM calls for the same ticker |
+| 🔲 | **Parallel Data Fetching in Worker** | Use `ThreadPoolExecutor` to run `get_stock_price` and `get_company_news` concurrently within each Worker, then pass both results to `generate_summary`; estimated ~3–5s saved per ticker |
 | 🔲 | **Intent Classification** | Add an intent classifier before the Decomposer to map Chinese company names to tickers (e.g. 台積電 → TSM) and reject non-stock-related queries |
 | 🔲 | **Token Optimization** | Change Worker output to a structured JSON summary (price, change, sentiment, key points) instead of full Markdown; Aggregator synthesizes from structured data, significantly reducing input tokens |
-| 🔲 | **Deterministic Partition Assignment** | Replace `random` partitioner with explicit `partition=i % num_partitions` to guarantee different tickers are always routed to different partitions for true parallel processing |
-| 🔲 | **Parallel Data Fetching in Worker** | Use `ThreadPoolExecutor` to run `get_stock_price` and `get_company_news` concurrently within each Worker, then pass both results to `generate_summary`; estimated ~3–5s saved per ticker |

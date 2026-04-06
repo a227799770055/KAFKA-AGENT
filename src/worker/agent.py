@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 _TOOLS = [get_stock_price, get_company_news, generate_summary]
 
+_LLM = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    google_api_key=os.getenv("GEMINI_API_KEY"),
+).bind_tools(_TOOLS)
+
 
 # ── State ──────────────────────────────────────────────────────────────────
 
@@ -34,16 +39,8 @@ class WorkerState(TypedDict):
 
 # ── Nodes ──────────────────────────────────────────────────────────────────
 
-def _build_llm():
-    return ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=os.getenv("GEMINI_API_KEY"),
-    ).bind_tools(_TOOLS)
-
-
 def llm_node(state: WorkerState) -> dict:
-    llm = _build_llm()
-    response = llm.invoke(state["messages"])
+    response = _LLM.invoke(state["messages"])
     return {"messages": [response]}
 
 
@@ -100,9 +97,6 @@ class WorkerAgent:
                 ]
             })
 
-            for msg in result["messages"]:
-                logger.debug("[worker] message type=%s content=%s", type(msg).__name__, msg)
-
             thoughts = _extract_thoughts(result["messages"], task)
             summary = _extract_summary(result["messages"])
 
@@ -126,7 +120,6 @@ class WorkerAgent:
                 original_message=task,
                 error_type=type(exc).__name__,
                 stack_trace=traceback.format_exc(),
-                retry_count=0,
                 failed_at=utcnow(),
             )
             return dlq, thoughts

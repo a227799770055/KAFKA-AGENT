@@ -2,7 +2,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.common.retry import MaxRetriesExceeded
 from src.common.schemas import AnalysisResult, DLQMessage, TickerTask, utcnow
 from src.worker.agent import WorkerAgent
 
@@ -108,16 +107,16 @@ class TestWorkerAgentSuccess:
 class TestWorkerAgentFailure:
     def test_returns_dlq_on_max_retries_exceeded(self, task):
         """get_stock_price 耗盡重試後應回傳 DLQMessage。"""
-        with patch("src.worker.agent.get_stock_price", side_effect=MaxRetriesExceeded("yf failed")):
+        with patch("src.worker.agent.get_stock_price", side_effect=Exception("yf failed")):
             result, thoughts = WorkerAgent().run(task)
 
         assert isinstance(result, DLQMessage)
         assert result.original_message.ticker == "NVDA"
-        assert result.retry_count == 3
+        assert result.error_type == "Exception"
 
     def test_dlq_contains_stack_trace(self, task):
         """DLQMessage 應包含非空的 stack_trace。"""
-        with patch("src.worker.agent.get_stock_price", side_effect=MaxRetriesExceeded("yf failed")):
+        with patch("src.worker.agent.get_stock_price", side_effect=Exception("yf failed")):
             result, _ = WorkerAgent().run(task)
 
         assert isinstance(result.stack_trace, str)
@@ -125,7 +124,7 @@ class TestWorkerAgentFailure:
 
     def test_thoughts_still_emitted_on_failure(self, task):
         """失敗時仍應有部分 thought 被記錄（在失敗點之前的）。"""
-        with patch("src.worker.agent.get_stock_price", side_effect=MaxRetriesExceeded("yf failed")):
+        with patch("src.worker.agent.get_stock_price", side_effect=Exception("yf failed")):
             _, thoughts = WorkerAgent().run(task)
 
         # iter 1 的 THOUGHT 和 ACTION 已發出，OBSERVATION 還沒到就失敗了
@@ -136,7 +135,7 @@ class TestWorkerAgentFailure:
     def test_get_company_news_failure_returns_dlq(self, task, price_data):
         """get_company_news 失敗也應回傳 DLQMessage。"""
         with patch("src.worker.agent.get_stock_price", return_value=price_data), \
-             patch("src.worker.agent.get_company_news", side_effect=MaxRetriesExceeded("finnhub failed")):
+             patch("src.worker.agent.get_company_news", side_effect=Exception("finnhub failed")):
 
             result, _ = WorkerAgent().run(task)
 

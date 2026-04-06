@@ -1,7 +1,7 @@
 import logging
 import sys
 
-from configs.kafka_config import TOPIC_AGENT_THOUGHTS, TOPIC_FINAL_REPORTS, TOPIC_TICKER_TASKS
+from configs.kafka_config import TICKER_TASKS_PARTITIONS, TOPIC_AGENT_THOUGHTS, TOPIC_FINAL_REPORTS, TOPIC_TICKER_TASKS
 from src.common.kafka_wrapper import KafkaConsumer, KafkaProducer
 from src.common.logging_config import setup_logging
 from src.common.redis_client import RedisClient
@@ -35,9 +35,9 @@ def main(query: str) -> None:
         producer.produce(TOPIC_AGENT_THOUGHTS, thought, key=task_id)
 
     # ── 發布 TickerTasks ──────────────────────────────────────────────
-    for task in tasks:
-        producer.produce(TOPIC_TICKER_TASKS, task, key=None)
-        logger.info("[decomposer] produced task ticker=%s task_id=%s", task.ticker, task_id)
+    for i, task in enumerate(tasks):
+        producer.produce(TOPIC_TICKER_TASKS, task, key=None, partition=i % TICKER_TASKS_PARTITIONS)
+        logger.info("[decomposer] produced task ticker=%s task_id=%s partition=%d", task.ticker, task_id, i % TICKER_TASKS_PARTITIONS)
 
     producer.flush()
     logger.info("[decomposer] done, dispatched %d task(s) for query=%r", total, query)
@@ -54,6 +54,7 @@ def main(query: str) -> None:
         while True:
             report = consumer.poll(FinalReport, timeout=2.0)
             if report and report.task_id == task_id:
+                consumer.commit()  # 確認收到正確報告後才 commit
                 print(report.report)
                 break
     finally:
