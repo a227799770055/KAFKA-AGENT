@@ -73,7 +73,13 @@ def analyze_node(state: ChatState) -> dict:
 def respond_node(state: ChatState) -> dict:
     """一般對話，直接取 LLM 回覆文字。"""
     last_msg = state["messages"][-1]
-    return {"response": last_msg.content}
+    content = last_msg.content
+    if isinstance(content, list):
+        content = "".join(
+            part["text"] for part in content
+            if isinstance(part, dict) and "text" in part
+        )
+    return {"response": content}
 
 
 # ── 路由邏輯 ───────────────────────────────────────────────────────────────
